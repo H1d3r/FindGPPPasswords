@@ -8,13 +8,52 @@ import (
 	"encoding/binary"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"unicode/utf16"
 
-	"github.com/jfjallid/go-smb/smb"
+	smbclient "github.com/TheManticoreProject/Manticore/network/smb/client"
+	"github.com/TheManticoreProject/Manticore/windows/fileflags"
 	"github.com/zenazn/pkcs7pad"
 )
+
+// transferChunk bounds how many bytes are buffered in memory per read iteration
+// when downloading a remote file. The SMB client further splits each call to fit
+// the negotiated MaxBufferSize, so this only caps our own buffering.
+const transferChunk = 0xFF00
+
+// readRemoteFile streams the remote file at the share-relative path on the
+// client's current tree into w.
+func readRemoteFile(client *smbclient.Client, path string, w io.Writer) error {
+	h, err := client.OpenFile(path, smbclient.OpenOptions{
+		DesiredAccess:     fileflags.GENERIC_READ,
+		ShareAccess:       fileflags.FILE_SHARE_READ,
+		CreateDisposition: fileflags.FILE_OPEN,
+		CreateOptions:     fileflags.FILE_NON_DIRECTORY_FILE,
+	})
+	if err != nil {
+		return err
+	}
+	defer client.CloseFile(h)
+
+	var offset uint64
+	for {
+		chunk, rerr := client.ReadFile(h, offset, transferChunk)
+		if len(chunk) > 0 {
+			if _, werr := w.Write(chunk); werr != nil {
+				return werr
+			}
+			offset += uint64(len(chunk))
+		}
+		// The client surfaces an error at end of file; a short read also marks
+		// the end. Either way we stop after consuming whatever was returned.
+		if rerr != nil || uint32(len(chunk)) < transferChunk {
+			break
+		}
+	}
+	return nil
+}
 
 // XML structure for Properties
 type User_Properties struct {
@@ -103,16 +142,16 @@ type GroupPolicyPreferencePasswordsFound struct {
 	Entries map[string][]*CPasswordEntry
 }
 
-func (r *GroupPolicyPreferencePasswordsFound) CallbackFunctionCPassword(session *smb.Connection, share string, pathToFile string) error {
+func (r *GroupPolicyPreferencePasswordsFound) CallbackFunctionCPassword(client *smbclient.Client, share string, pathToFile string) error {
 	elements := strings.Split(pathToFile, ".")
 	extension := strings.ToLower(elements[len(elements)-1])
 
 	if strings.EqualFold(extension, "xml") {
-		uncPathToFile := fmt.Sprintf("\\\\%s\\%s\\%s", session.GetTargetInfo().DnsComputerName, share, pathToFile)
+		uncPathToFile := fmt.Sprintf("\\\\%s\\%s\\%s", client.ServerIdentity().DNSComputerName, share, pathToFile)
 
 		buffer := bytes.NewBuffer([]byte{})
 
-		err := session.RetrieveFile(share, pathToFile, 0, buffer.Write)
+		err := readRemoteFile(client, pathToFile, buffer)
 		if err != nil {
 			return err
 		}
