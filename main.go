@@ -144,6 +144,7 @@ func TestCredentials(gpppfound crypto.GroupPolicyPreferencePasswordsFound, confi
 						domain,
 						username,
 						entry.Password,
+						"",
 						config.Debug,
 					)
 
@@ -222,6 +223,7 @@ func main() {
 		config.Credentials.Domain,
 		config.Credentials.Username,
 		config.Credentials.Password,
+		config.Credentials.Hashes,
 		config.Debug,
 	)
 	err = ldapSession.Connect()

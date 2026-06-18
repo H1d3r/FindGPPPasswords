@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/TheManticoreProject/Manticore/windows/credentials"
 	"github.com/go-ldap/ldap/v3"
 )
 
@@ -28,6 +29,7 @@ type Session struct {
 	domain   string
 	username string
 	password string
+	hashes   string
 	// Config
 	debug    bool
 	useldaps bool
@@ -40,7 +42,7 @@ type Domain struct {
 	SID               string `json:"sid"`
 }
 
-func (s *Session) InitSession(host string, port int, useldaps bool, domain string, username string, password string, debug bool) error {
+func (s *Session) InitSession(host string, port int, useldaps bool, domain string, username string, password string, hashes string, debug bool) error {
 	// Check if TCP port is valid
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("invalid port number. Port must be in the range 1-65535")
@@ -53,10 +55,47 @@ func (s *Session) InitSession(host string, port int, useldaps bool, domain strin
 	s.domain = domain
 	s.username = username
 	s.password = password
+	s.hashes = hashes
 	// Config
 	s.useldaps = useldaps
 	s.debug = debug
 
+	return nil
+}
+
+// authenticate binds the given connection using the session credentials. When
+// NT/LM hashes are supplied (-H), it binds over NTLMSSP with the NT hash
+// (pass-the-hash). Otherwise it falls back to a simple bind with the password,
+// or an unauthenticated bind when no secret is provided.
+func (s *Session) authenticate(conn *ldap.Conn) error {
+	if len(s.hashes) > 0 {
+		_, ntHash, err := credentials.ParseLMNTHashes(s.hashes)
+		if err != nil {
+			return fmt.Errorf("error parsing NT/LM hashes: %w", err)
+		}
+		if len(ntHash) > 0 {
+			if err := conn.NTLMBindWithHash(s.domain, s.username, ntHash); err != nil {
+				return fmt.Errorf("error binding with NT hash (pass-the-hash): %w", err)
+			}
+			return nil
+		}
+	}
+
+	if len(s.password) > 0 {
+		if err := conn.Bind(fmt.Sprintf("%s@%s", s.username, s.domain), s.password); err != nil {
+			return fmt.Errorf("error binding with credentials: %w", err)
+		}
+		return nil
+	}
+
+	// Unauthenticated bind
+	bindDN := ""
+	if s.username != "" {
+		bindDN = fmt.Sprintf("%s@%s", s.username, s.domain)
+	}
+	if err := conn.UnauthenticatedBind(bindDN); err != nil {
+		return fmt.Errorf("error performing unauthenticated bind: %w", err)
+	}
 	return nil
 }
 
@@ -87,24 +126,9 @@ func (s *Session) Connect() error {
 		}
 	}
 
-	// Bind with credentials if provided
-	if len(s.password) > 0 {
-		// Binding with credentials
-		err = ldapConnection.Bind(fmt.Sprintf("%s@%s", s.username, s.domain), s.password)
-		if err != nil {
-			return fmt.Errorf("error binding with credentials: %w", err)
-		}
-	} else {
-		// Unauthenticated Bind
-		bindDN := ""
-		if s.username != "" {
-			bindDN = fmt.Sprintf("%s@%s", s.username, s.domain)
-		}
-
-		err = ldapConnection.UnauthenticatedBind(bindDN)
-		if err != nil {
-			return fmt.Errorf("error performing unauthenticated bind: %w", err)
-		}
+	// Authenticate (pass-the-hash when -H is supplied, password otherwise).
+	if err := s.authenticate(ldapConnection); err != nil {
+		return err
 	}
 
 	s.connection = ldapConnection
@@ -283,9 +307,8 @@ func CanLogin(ldapSession *Session) (bool, error) {
 	}
 	defer ldapConnection.Close()
 
-	// Bind with provided credentials
-	err = ldapConnection.Bind(fmt.Sprintf("%s\\%s", ldapSession.domain, ldapSession.username), ldapSession.password)
-	if err != nil {
+	// Authenticate (pass-the-hash when -H is supplied, password otherwise).
+	if err := ldapSession.authenticate(ldapConnection); err != nil {
 		return false, err
 	}
 
