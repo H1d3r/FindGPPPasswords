@@ -100,12 +100,14 @@ func FindCPasswords(dnsHostname []string, config config.Config, testResults *cry
 		return fmt.Errorf("could not resolve host %s", dnsHostname[0])
 	}
 
-	// Build the credentials used to authenticate the SMB session.
+	// Build the credentials used to authenticate the SMB session. When NT/LM
+	// hashes are supplied (-H), the Manticore client authenticates with the NT
+	// hash (pass-the-hash) instead of the password.
 	creds, err := credentials.NewCredentials(
 		config.Credentials.Domain,
 		config.Credentials.Username,
 		config.Credentials.Password,
-		"",
+		config.Credentials.Hashes,
 	)
 	if err != nil {
 		return err

@@ -184,6 +184,7 @@ func main() {
 	config.Credentials.Username = authUsername
 	config.Credentials.Domain = authDomain
 	config.Credentials.Password = authPassword
+	config.Credentials.Hashes = authHashes
 	config.Credentials.DCIP = domainController
 	if len(dnsNameServer) == 0 {
 		config.DnsNameServer = domainController
