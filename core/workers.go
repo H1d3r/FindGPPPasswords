@@ -14,6 +14,20 @@ import (
 	"github.com/jfjallid/go-smb/spnego"
 )
 
+type gppResultCollector struct {
+	mu      sync.Mutex
+	results *crypto.GroupPolicyPreferencePasswordsFound
+}
+
+func (c *gppResultCollector) merge(results *crypto.GroupPolicyPreferencePasswordsFound) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for path, entries := range results.Entries {
+		c.results.Entries[path] = append(c.results.Entries[path], entries...)
+	}
+}
+
 // SMBListFilesRecursivelyAndCallback lists files recursively in a given directory on an SMB share and executes a callback function for each file found.
 //
 // Parameters:
@@ -145,6 +159,7 @@ func FindCPasswords(dnsHostname []string, config config.Config, testResults *cry
 // It takes a slice of LDAP entries, a configuration, and a pointer to the found Group Policy Preference Passwords.
 func RunWorkers(maxThreads int, domainControllersResults []*ldapv3.Entry, config config.Config, gpppfound *crypto.GroupPolicyPreferencePasswordsFound) {
 	sem := make(chan struct{}, config.Threads)
+	collector := gppResultCollector{results: gpppfound}
 
 	maxLenOfAdvancementString := len(fmt.Sprintf("%d", len(domainControllersResults)))
 	advancementFormatString := fmt.Sprintf("(%%0%dd/%%0%dd)", maxLenOfAdvancementString, maxLenOfAdvancementString)
@@ -160,6 +175,9 @@ func RunWorkers(maxThreads int, domainControllersResults []*ldapv3.Entry, config
 		// start long running go routine
 		go func(id int, entry *ldapv3.Entry) {
 			defer wg.Done()
+			workerResults := crypto.GroupPolicyPreferencePasswordsFound{
+				Entries: make(map[string][]*crypto.CPasswordEntry),
+			}
 
 			advancementString := fmt.Sprintf(advancementFormatString, k+1, len(domainControllersResults))
 
@@ -168,8 +186,9 @@ func RunWorkers(maxThreads int, domainControllersResults []*ldapv3.Entry, config
 			err := FindCPasswords(
 				entry.GetEqualFoldAttributeValues("dnsHostname"),
 				config,
-				gpppfound,
+				&workerResults,
 			)
+			collector.merge(&workerResults)
 
 			if err != nil {
 				logger.Warn(fmt.Sprintf("%s Error: %s", advancementString, err))
