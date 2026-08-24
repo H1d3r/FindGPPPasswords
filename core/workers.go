@@ -1,17 +1,18 @@
 package core
 
 import (
-	"FindGPPPasswords/core/config"
-	"FindGPPPasswords/core/crypto"
-	"FindGPPPasswords/core/logger"
-	"FindGPPPasswords/network/dns"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/TheManticoreProject/Manticore/logger"
+	"github.com/TheManticoreProject/Manticore/network/dns"
+	"github.com/TheManticoreProject/Manticore/network/ldap"
 	smbclient "github.com/TheManticoreProject/Manticore/network/smb/client"
 	"github.com/TheManticoreProject/Manticore/windows/credentials"
-	ldapv3 "github.com/go-ldap/ldap/v3"
+
+	"manticore-FindGPPPasswords/config"
+	"manticore-FindGPPPasswords/gpp"
 )
 
 // SMBListFilesRecursivelyAndCallback lists files recursively in a given directory on the client's current tree and executes a callback function for each file found.
@@ -93,7 +94,7 @@ func SMBListFilesRecursivelyAndCallback(client *smbclient.Client, share string, 
 //
 // Returns:
 // - An error if any step of the process fails, otherwise nil.
-func FindCPasswords(dnsHostname []string, config config.Config, testResults *crypto.GroupPolicyPreferencePasswordsFound) error {
+func FindCPasswords(dnsHostname []string, config config.Config, testResults *gpp.GroupPolicyPreferencePasswordsFound) error {
 	targetIp := dns.DNSLookup(dnsHostname[0], config.DnsNameServer)
 
 	if len(targetIp) == 0 {
@@ -140,7 +141,7 @@ func FindCPasswords(dnsHostname []string, config config.Config, testResults *cry
 
 // RunWorkers starts a specified number of worker goroutines to process tasks from the channel.
 // It takes a slice of LDAP entries, a configuration, and a pointer to the found Group Policy Preference Passwords.
-func RunWorkers(maxThreads int, domainControllersResults []*ldapv3.Entry, config config.Config, gpppfound *crypto.GroupPolicyPreferencePasswordsFound) {
+func RunWorkers(maxThreads int, domainControllersResults []*ldap.Entry, config config.Config, gpppfound *gpp.GroupPolicyPreferencePasswordsFound) {
 	sem := make(chan struct{}, config.Threads)
 
 	maxLenOfAdvancementString := len(fmt.Sprintf("%d", len(domainControllersResults)))
@@ -155,7 +156,7 @@ func RunWorkers(maxThreads int, domainControllersResults []*ldapv3.Entry, config
 		sem <- struct{}{}
 
 		// start long running go routine
-		go func(id int, entry *ldapv3.Entry) {
+		go func(id int, entry *ldap.Entry) {
 			defer wg.Done()
 
 			advancementString := fmt.Sprintf(advancementFormatString, k+1, len(domainControllersResults))

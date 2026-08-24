@@ -1,17 +1,17 @@
 package exporter
 
 import (
-	"FindGPPPasswords/core/config"
-	"FindGPPPasswords/core/crypto"
-	"FindGPPPasswords/core/logger"
-	"path"
-
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
+	"github.com/TheManticoreProject/Manticore/logger"
 	"github.com/xuri/excelize/v2"
+
+	"manticore-FindGPPPasswords/config"
+	"manticore-FindGPPPasswords/gpp"
 )
 
 func GetExcelCellID(rowNumber int, columnNumber int) string {
@@ -32,7 +32,7 @@ func GetExcelCellID(rowNumber int, columnNumber int) string {
 	return columnID + fmt.Sprintf("%d", rowNumber)
 }
 
-func GenerateExcel(gpppfound crypto.GroupPolicyPreferencePasswordsFound, config config.Config, outputFile string) {
+func GenerateExcel(gpppfound gpp.GroupPolicyPreferencePasswordsFound, config config.Config, outputFile string) {
 	domain := strings.ToUpper(config.Credentials.Domain)
 
 	if len(gpppfound.Entries) != 0 {

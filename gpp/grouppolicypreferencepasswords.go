@@ -1,21 +1,15 @@
-package crypto
+package gpp
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/xml"
 	"fmt"
 	"io"
-	"log"
 	"strings"
-	"unicode/utf16"
 
+	"github.com/TheManticoreProject/Manticore/crypto/gppp"
 	smbclient "github.com/TheManticoreProject/Manticore/network/smb/client"
 	"github.com/TheManticoreProject/Manticore/windows/fileflags"
-	"github.com/zenazn/pkcs7pad"
 )
 
 // transferChunk bounds how many bytes are buffered in memory per read iteration
@@ -156,7 +150,10 @@ func (r *GroupPolicyPreferencePasswordsFound) CallbackFunctionCPassword(client *
 			return err
 		}
 
-		cpasswords := ExtractCPasswordsFromRawXML(buffer)
+		cpasswords, err := ExtractCPasswordsFromRawXML(buffer)
+		if err != nil {
+			return fmt.Errorf("error extracting GPP passwords from %s: %w", pathToFile, err)
+		}
 
 		if len(cpasswords) != 0 {
 			if _, ok := r.Entries[uncPathToFile]; !ok {
@@ -169,65 +166,7 @@ func (r *GroupPolicyPreferencePasswordsFound) CallbackFunctionCPassword(client *
 	return nil
 }
 
-// DecryptCPassword decrypts a base64 encoded string using the fixed AES key and IV
-func DecryptCPassword(encStr string) string {
-	// AES Key as per the Microsoft documentation
-	key := []byte{
-		0x4e, 0x99, 0x06, 0xe8, 0xfc, 0xb6, 0x6c, 0xc9, 0xfa, 0xf4, 0x93, 0x10, 0x62, 0x0f, 0xfe, 0xe8,
-		0xf4, 0x96, 0xe8, 0x06, 0xcc, 0x05, 0x79, 0x90, 0x20, 0x9b, 0x09, 0xa4, 0x33, 0xb6, 0x6c, 0x1b,
-	}
-
-	// Fixed null IV (Initialization Vector)
-	iv := make([]byte, aes.BlockSize)
-
-	// Padding base64 encoded string to ensure it's properly padded
-	pad := len(encStr) % 4
-	if pad == 1 {
-		encStr = encStr[:len(encStr)-1]
-	} else if pad == 2 || pad == 3 {
-		encStr += strings.Repeat("=", 4-pad)
-	}
-
-	// Decode base64 string
-	ciphertext, err := base64.StdEncoding.DecodeString(encStr)
-	if err != nil {
-		return "" //, fmt.Errorf("base64 decoding failed: %v", err)
-	}
-
-	// Create AES cipher block
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "" //, fmt.Errorf("failed to create AES cipher: %v", err)
-	}
-
-	// Ensure ciphertext length is a multiple of AES block size
-	if len(ciphertext)%aes.BlockSize != 0 {
-		return "" //, fmt.Errorf("ciphertext is not a multiple of the block size")
-	}
-
-	// Create CBC decrypter
-	mode := cipher.NewCBCDecrypter(block, iv)
-
-	// Decrypt the ciphertext
-	plaintext := make([]byte, len(ciphertext))
-	mode.CryptBlocks(plaintext, ciphertext)
-
-	// Remove PKCS#7 padding
-	plaintext, err = pkcs7pad.Unpad(plaintext)
-	if err != nil {
-		return "" //, fmt.Errorf("unpadding failed: %v", err)
-	}
-
-	// Convert from UTF-16LE to string
-	password, err := decodeUTF16LE(plaintext)
-	if err != nil {
-		return "" //, fmt.Errorf("UTF-16-LE decoding failed: %v", err)
-	}
-
-	return password //, nil
-}
-
-func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) []*CPasswordEntry {
+func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) ([]*CPasswordEntry, error) {
 	// Create an instance of Groups to hold the parsed data
 	foundCpasswords := make([]*CPasswordEntry, 0)
 
@@ -235,18 +174,21 @@ func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) []*CPasswordEntry {
 		// Parse the XML data to search for ScheduledTasks
 		scheduledtasks := ScheduledTasks{}
 
-		err := xml.NewDecoder(buffer).Decode(&scheduledtasks)
-		if err != nil {
-			log.Fatalf("Error parsing XML: %v", err)
+		if err := xml.NewDecoder(buffer).Decode(&scheduledtasks); err != nil {
+			return nil, fmt.Errorf("error parsing ScheduledTasks XML: %w", err)
 		}
 
 		// Extract and print the desired properties
 		for _, task := range scheduledtasks.Tasks {
 			if len(task.Properties.CPassword) != 0 {
+				password, err := gppp.GPPPDecryptBase64(task.Properties.CPassword)
+				if err != nil {
+					return nil, fmt.Errorf("error decrypting cpassword for scheduled task %q: %w", task.Name, err)
+				}
 				entry := CPasswordEntry{
 					RunAs:     task.Properties.RunAs,
 					CPassword: task.Properties.CPassword,
-					Password:  DecryptCPassword(task.Properties.CPassword),
+					Password:  password,
 				}
 				foundCpasswords = append(foundCpasswords, &entry)
 			}
@@ -256,46 +198,27 @@ func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) []*CPasswordEntry {
 		// Parse the XML data to search for Users
 		groups := Groups{}
 
-		err := xml.NewDecoder(buffer).Decode(&groups)
-		if err != nil {
-			log.Fatalf("Error parsing XML: %v", err)
+		if err := xml.NewDecoder(buffer).Decode(&groups); err != nil {
+			return nil, fmt.Errorf("error parsing Groups XML: %w", err)
 		}
 
 		// Extract and print the desired properties
 		for _, user := range groups.Users {
 			if len(user.Properties.CPassword) != 0 {
+				password, err := gppp.GPPPDecryptBase64(user.Properties.CPassword)
+				if err != nil {
+					return nil, fmt.Errorf("error decrypting cpassword for user %q: %w", user.Properties.UserName, err)
+				}
 				entry := CPasswordEntry{
 					UserName:  user.Properties.UserName,
 					NewName:   user.Properties.NewName,
 					CPassword: user.Properties.CPassword,
-					Password:  DecryptCPassword(user.Properties.CPassword),
+					Password:  password,
 				}
 				foundCpasswords = append(foundCpasswords, &entry)
 			}
 		}
 	}
 
-	return foundCpasswords
-}
-
-// decodeUTF16LE decodes a UTF-16LE byte slice into a string
-func decodeUTF16LE(b []byte) (string, error) {
-	// Ensure the byte slice has an even length since UTF-16 is 2 bytes per character
-	if len(b)%2 != 0 {
-		return "", fmt.Errorf("invalid UTF-16LE byte slice length")
-	}
-
-	// Create a slice to hold the 16-bit runes
-	u16 := make([]uint16, len(b)/2)
-
-	// Use binary.Read to convert the byte slice into uint16 values in Little Endian order
-	err := binary.Read(bytes.NewReader(b), binary.LittleEndian, &u16)
-	if err != nil {
-		return "", fmt.Errorf("failed to convert bytes to UTF-16LE: %v", err)
-	}
-
-	// Decode the UTF-16 sequence, assuming no surrogate pairs are present
-	runes := utf16.Decode(u16)
-
-	return string(runes), nil
+	return foundCpasswords, nil
 }
