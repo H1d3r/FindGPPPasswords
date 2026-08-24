@@ -40,6 +40,10 @@ type Domain struct {
 	SID               string `json:"sid"`
 }
 
+func ldapTLSConfig(host string) *tls.Config {
+	return &tls.Config{ServerName: host}
+}
+
 func (s *Session) InitSession(host string, port int, useldaps bool, domain string, username string, password string, debug bool) error {
 	// Check if TCP port is valid
 	if port < 1 || port > 65535 {
@@ -70,11 +74,7 @@ func (s *Session) Connect() error {
 		// LDAPS connection
 		ldapConnection, err = ldap.DialURL(
 			fmt.Sprintf("ldaps://%s:%d", s.host, s.port),
-			ldap.DialWithTLSConfig(
-				&tls.Config{
-					InsecureSkipVerify: true,
-				},
-			),
+			ldap.DialWithTLSConfig(ldapTLSConfig(s.host)),
 		)
 		if err != nil {
 			return fmt.Errorf("error connecting to LDAPS server: %w", err)
@@ -268,11 +268,7 @@ func CanLogin(ldapSession *Session) (bool, error) {
 	if ldapSession.useldaps {
 		ldapConnection, err = ldap.DialURL(
 			fmt.Sprintf("ldaps://%s:%d", ldapSession.host, ldapSession.port),
-			ldap.DialWithTLSConfig(
-				&tls.Config{
-					InsecureSkipVerify: true,
-				},
-			),
+			ldap.DialWithTLSConfig(ldapTLSConfig(ldapSession.host)),
 		)
 	} else {
 		ldapConnection, err = ldap.DialURL(fmt.Sprintf("ldap://%s:%d", ldapSession.host, ldapSession.port))
