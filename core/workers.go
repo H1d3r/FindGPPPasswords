@@ -93,13 +93,15 @@ func SMBListFilesRecursivelyAndCallback(session *smb.Connection, share string, d
 				if DEBUG {
 					fmt.Printf("[SMBListFilesRecursivelyAndCallback] Failed to list files in directory %s with error: %s\n", entry.FullPath, err)
 				}
-				continue
+				return fmt.Errorf("error walking %s: %w", entry.FullPath, err)
 			}
 		} else {
 			if DEBUG {
 				logger.Debug(fmt.Sprintf("Found file '%s'", entry.FullPath))
 			}
-			callback(session, share, entry.FullPath)
+			if err := callback(session, share, entry.FullPath); err != nil {
+				return fmt.Errorf("error processing %s: %w", entry.FullPath, err)
+			}
 		}
 	}
 
