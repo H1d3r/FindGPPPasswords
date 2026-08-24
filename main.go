@@ -42,6 +42,16 @@ var (
 	testCredentials bool
 )
 
+func defaultLDAPPort(port int, useLdaps bool) int {
+	if port != 0 {
+		return port
+	}
+	if useLdaps {
+		return 636
+	}
+	return 389
+}
+
 func parseArgs() {
 	ap := parser.ArgumentsParser{Banner: "FindGPPPasswords - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.2"}
 
@@ -54,7 +64,7 @@ func parseArgs() {
 		fmt.Printf("[error] Error creating ArgumentGroup: %s\n", err)
 	} else {
 		group_ldapSettings.NewStringArgument(&domainController, "-dc", "--dc-ip", "", true, "IP Address of the domain controller or KDC (Key Distribution Center) for Kerberos. If omitted, it will use the domain part (FQDN) specified in the identity parameter.")
-		group_ldapSettings.NewTcpPortArgument(&ldapPort, "-lp", "--ldap-port", 389, false, "Port number to connect to LDAP server.")
+		group_ldapSettings.NewTcpPortArgument(&ldapPort, "-lp", "--ldap-port", 0, false, "Port number to connect to LDAP server. Defaults to 389 for LDAP and 636 for LDAPS.")
 		group_ldapSettings.NewBoolArgument(&useLdaps, "-L", "--use-ldaps", false, "Use LDAPS instead of LDAP.")
 	}
 
@@ -86,14 +96,7 @@ func parseArgs() {
 
 	ap.Parse()
 
-	// Set default port if not specified
-	if ldapPort == 0 {
-		if useLdaps {
-			ldapPort = 636
-		} else {
-			ldapPort = 389
-		}
-	}
+	ldapPort = defaultLDAPPort(ldapPort, useLdaps)
 
 	// Validate required arguments
 	if domainController == "" {
