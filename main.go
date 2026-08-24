@@ -161,6 +161,7 @@ func TestCredentials(gpppfound crypto.GroupPolicyPreferencePasswordsFound, confi
 							logger.Info(fmt.Sprintf("\x1b[91m   [!] %s\\%s : %s\x1b[0m", domain, username, entry.Password))
 						}
 					}
+					ldapSession.Close()
 					testedUsernames = append(testedUsernames, username)
 				} else {
 					logger.Info(fmt.Sprintf("\x1b[93m   [*] Skipping test of %s : %s to avoid potentiallockout.\x1b[0m", username, entry.Password))
@@ -226,6 +227,7 @@ func main() {
 	err = ldapSession.Connect()
 
 	if err == nil {
+		defer ldapSession.Close()
 		logger.Info(fmt.Sprintf("Connected as '%s\\%s'", authDomain, authUsername))
 
 		domainControllersQuery := "(&"
