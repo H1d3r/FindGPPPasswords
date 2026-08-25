@@ -4,7 +4,6 @@ import (
 	"FindGPPPasswords/core/config"
 	"FindGPPPasswords/core/crypto"
 	"FindGPPPasswords/core/logger"
-	"path"
 
 	"fmt"
 	"os"
@@ -32,14 +31,21 @@ func GetExcelCellID(rowNumber int, columnNumber int) string {
 	return columnID + fmt.Sprintf("%d", rowNumber)
 }
 
+func excelOutputPath(outputDir string, outputFile string) string {
+	if outputFile == "" {
+		return filepath.Join(outputDir, "GroupPolicyPasswords.xlsx")
+	}
+	if filepath.IsAbs(outputFile) {
+		return filepath.Clean(outputFile)
+	}
+	return filepath.Join(outputDir, outputFile)
+}
+
 func GenerateExcel(gpppfound crypto.GroupPolicyPreferencePasswordsFound, config config.Config, outputFile string) {
 	domain := strings.ToUpper(config.Credentials.Domain)
 
 	if len(gpppfound.Entries) != 0 {
-		pathToFile := path.Join(config.OutputDir, "GroupPolicyPasswords.xlsx")
-		if len(outputFile) != 0 {
-			pathToFile = config.OutputDir + outputFile
-		}
+		pathToFile := excelOutputPath(config.OutputDir, outputFile)
 
 		logger.Info(fmt.Sprintf("| Generating Excel file '%s'", pathToFile))
 
@@ -51,6 +57,7 @@ func GenerateExcel(gpppfound crypto.GroupPolicyPreferencePasswordsFound, config 
 		}
 
 		f := excelize.NewFile()
+		defer f.Close()
 
 		// Create styles
 		styleHeader, err := f.NewStyle(
@@ -101,34 +108,29 @@ func GenerateExcel(gpppfound crypto.GroupPolicyPreferencePasswordsFound, config 
 			}
 		} else {
 			// Create headers
-			attributes := []string{"Username", "NewName", "Password", "Path"}
+			attributes := []string{"RunAs", "Username", "NewName", "Password", "Path"}
 			for columnID, attr := range attributes {
 				f.SetCellValue(domain, GetExcelCellID(1, columnID+1), attr)
 				f.SetCellStyle(domain, GetExcelCellID(1, columnID+1), GetExcelCellID(1, columnID+1), styleHeader)
 			}
 
-			rowID := 0
+			rowID := 2
 			for path, cpasswordentries := range gpppfound.Entries {
-				columnID := 0
 				for _, cpasswordentry := range cpasswordentries {
-					//
-					f.SetCellValue(domain, GetExcelCellID(rowID+2, columnID+1), cpasswordentry.UserName)
-					f.SetCellStyle(domain, GetExcelCellID(rowID+2, columnID+1), GetExcelCellID(rowID+2, columnID+1), styleBorder)
-					columnID += 1
-
-					f.SetCellValue(domain, GetExcelCellID(rowID+2, columnID+1), cpasswordentry.NewName)
-					f.SetCellStyle(domain, GetExcelCellID(rowID+2, columnID+1), GetExcelCellID(rowID+2, columnID+1), styleBorder)
-					columnID += 1
-
-					f.SetCellValue(domain, GetExcelCellID(rowID+2, columnID+1), cpasswordentry.Password)
-					f.SetCellStyle(domain, GetExcelCellID(rowID+2, columnID+1), GetExcelCellID(rowID+2, columnID+1), styleBorder)
-					columnID += 1
-
-					f.SetCellValue(domain, GetExcelCellID(rowID+2, columnID+1), path)
-					f.SetCellStyle(domain, GetExcelCellID(rowID+2, columnID+1), GetExcelCellID(rowID+2, columnID+1), styleBorder)
-					columnID += 1
+					values := []string{
+						cpasswordentry.RunAs,
+						cpasswordentry.UserName,
+						cpasswordentry.NewName,
+						cpasswordentry.Password,
+						path,
+					}
+					for columnID, value := range values {
+						cellID := GetExcelCellID(rowID, columnID+1)
+						f.SetCellValue(domain, cellID, value)
+						f.SetCellStyle(domain, cellID, cellID, styleBorder)
+					}
+					rowID++
 				}
-				rowID += 1
 			}
 
 		}
