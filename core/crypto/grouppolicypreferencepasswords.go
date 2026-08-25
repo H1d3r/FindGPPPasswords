@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/xml"
 	"fmt"
-	"log"
 	"strings"
 	"unicode/utf16"
 
@@ -127,7 +126,10 @@ func (r *GroupPolicyPreferencePasswordsFound) CallbackFunctionCPassword(session 
 			return err
 		}
 
-		cpasswords := ExtractCPasswordsFromRawXML(buffer)
+		cpasswords, err := ExtractCPasswordsFromRawXML(buffer)
+		if err != nil {
+			return fmt.Errorf("error parsing %s: %w", pathToFile, err)
+		}
 
 		if len(cpasswords) != 0 {
 			if _, ok := r.Entries[uncPathToFile]; !ok {
@@ -198,12 +200,12 @@ func DecryptCPassword(encStr string) string {
 	return password //, nil
 }
 
-func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) []*CPasswordEntry {
+func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) ([]*CPasswordEntry, error) {
 	foundCpasswords := make([]*CPasswordEntry, 0)
 	document := preferenceDocument{}
 
 	if err := xml.NewDecoder(buffer).Decode(&document); err != nil {
-		log.Fatalf("Error parsing XML: %v", err)
+		return nil, fmt.Errorf("error parsing XML: %w", err)
 	}
 
 	for _, item := range document.Items {
@@ -216,6 +218,7 @@ func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) []*CPasswordEntry {
 		if runAs == "" {
 			runAs = properties.AccountName
 		}
+
 		entry := CPasswordEntry{
 			RunAs:     runAs,
 			UserName:  properties.UserName,
@@ -226,7 +229,7 @@ func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) []*CPasswordEntry {
 		foundCpasswords = append(foundCpasswords, &entry)
 	}
 
-	return foundCpasswords
+	return foundCpasswords, nil
 }
 
 // decodeUTF16LE decodes a UTF-16LE byte slice into a string

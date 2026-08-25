@@ -92,6 +92,7 @@ func (s *Session) Connect() error {
 		// Binding with credentials
 		err = ldapConnection.Bind(fmt.Sprintf("%s@%s", s.username, s.domain), s.password)
 		if err != nil {
+			ldapConnection.Close()
 			return fmt.Errorf("error binding with credentials: %w", err)
 		}
 	} else {
@@ -103,6 +104,7 @@ func (s *Session) Connect() error {
 
 		err = ldapConnection.UnauthenticatedBind(bindDN)
 		if err != nil {
+			ldapConnection.Close()
 			return fmt.Errorf("error performing unauthenticated bind: %w", err)
 		}
 	}
@@ -112,8 +114,16 @@ func (s *Session) Connect() error {
 	return nil
 }
 
-func (s *Session) ReConnect() error {
+func (s *Session) Close() {
+	if s.connection == nil {
+		return
+	}
 	s.connection.Close()
+	s.connection = nil
+}
+
+func (s *Session) ReConnect() error {
+	s.Close()
 	return s.Connect()
 }
 
