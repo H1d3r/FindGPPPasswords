@@ -5,15 +5,29 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TheManticoreProject/Manticore/logger"
 	"github.com/TheManticoreProject/Manticore/network/dns"
 	"github.com/TheManticoreProject/Manticore/network/ldap"
 	smbclient "github.com/TheManticoreProject/Manticore/network/smb/client"
 	"github.com/TheManticoreProject/Manticore/windows/credentials"
+	"manticore-FindGPPPasswords/logger"
 
 	"manticore-FindGPPPasswords/config"
 	"manticore-FindGPPPasswords/gpp"
 )
+
+type gppResultCollector struct {
+	mu      sync.Mutex
+	results *gpp.GroupPolicyPreferencePasswordsFound
+}
+
+func (c *gppResultCollector) merge(results *gpp.GroupPolicyPreferencePasswordsFound) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for path, entries := range results.Entries {
+		c.results.Entries[path] = append(c.results.Entries[path], entries...)
+	}
+}
 
 // SMBListFilesRecursivelyAndCallback lists files recursively in a given directory on the client's current tree and executes a callback function for each file found.
 //
@@ -67,13 +81,15 @@ func SMBListFilesRecursivelyAndCallback(client *smbclient.Client, share string, 
 				if DEBUG {
 					fmt.Printf("[SMBListFilesRecursivelyAndCallback] Failed to list files in directory %s with error: %s\n", fullPath, err)
 				}
-				continue
+				return fmt.Errorf("error walking %s: %w", fullPath, err)
 			}
 		} else {
 			if DEBUG {
 				logger.Debug(fmt.Sprintf("Found file '%s'", fullPath))
 			}
-			callback(client, share, fullPath)
+			if err := callback(client, share, fullPath); err != nil {
+				return fmt.Errorf("error processing %s: %w", fullPath, err)
+			}
 		}
 	}
 
@@ -143,6 +159,7 @@ func FindCPasswords(dnsHostname []string, config config.Config, testResults *gpp
 // It takes a slice of LDAP entries, a configuration, and a pointer to the found Group Policy Preference Passwords.
 func RunWorkers(maxThreads int, domainControllersResults []*ldap.Entry, config config.Config, gpppfound *gpp.GroupPolicyPreferencePasswordsFound) {
 	sem := make(chan struct{}, config.Threads)
+	collector := gppResultCollector{results: gpppfound}
 
 	maxLenOfAdvancementString := len(fmt.Sprintf("%d", len(domainControllersResults)))
 	advancementFormatString := fmt.Sprintf("(%%0%dd/%%0%dd)", maxLenOfAdvancementString, maxLenOfAdvancementString)
@@ -158,6 +175,9 @@ func RunWorkers(maxThreads int, domainControllersResults []*ldap.Entry, config c
 		// start long running go routine
 		go func(id int, entry *ldap.Entry) {
 			defer wg.Done()
+			workerResults := gpp.GroupPolicyPreferencePasswordsFound{
+				Entries: make(map[string][]*gpp.CPasswordEntry),
+			}
 
 			advancementString := fmt.Sprintf(advancementFormatString, k+1, len(domainControllersResults))
 
@@ -166,8 +186,9 @@ func RunWorkers(maxThreads int, domainControllersResults []*ldap.Entry, config c
 			err := FindCPasswords(
 				entry.GetEqualFoldAttributeValues("dnsHostname"),
 				config,
-				gpppfound,
+				&workerResults,
 			)
+			collector.merge(&workerResults)
 
 			if err != nil {
 				logger.Warn(fmt.Sprintf("%s Error: %s", advancementString, err))

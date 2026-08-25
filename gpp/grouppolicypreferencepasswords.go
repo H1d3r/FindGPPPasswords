@@ -51,10 +51,12 @@ func readRemoteFile(client *smbclient.Client, path string, w io.Writer) error {
 
 // XML structure for Properties
 type User_Properties struct {
-	Action    string `xml:"action,attr"`
-	NewName   string `xml:"newName,attr"`
-	UserName  string `xml:"userName,attr"`
-	CPassword string `xml:"cpassword,attr"`
+	Action      string `xml:"action,attr"`
+	NewName     string `xml:"newName,attr"`
+	UserName    string `xml:"userName,attr"`
+	RunAs       string `xml:"runAs,attr"`
+	AccountName string `xml:"accountName,attr"`
+	CPassword   string `xml:"cpassword,attr"`
 }
 
 // XML structure for User
@@ -124,6 +126,14 @@ type ScheduledTasks struct {
 	Tasks []Task `xml:"Task"`
 }
 
+type preferenceItem struct {
+	Properties User_Properties `xml:"Properties"`
+}
+
+type preferenceDocument struct {
+	Items []preferenceItem `xml:",any"`
+}
+
 type CPasswordEntry struct {
 	RunAs     string
 	UserName  string
@@ -167,57 +177,39 @@ func (r *GroupPolicyPreferencePasswordsFound) CallbackFunctionCPassword(client *
 }
 
 func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) ([]*CPasswordEntry, error) {
-	// Create an instance of Groups to hold the parsed data
 	foundCpasswords := make([]*CPasswordEntry, 0)
+	document := preferenceDocument{}
 
-	if strings.Contains(buffer.String(), "</ScheduledTasks>") {
-		// Parse the XML data to search for ScheduledTasks
-		scheduledtasks := ScheduledTasks{}
+	if err := xml.NewDecoder(buffer).Decode(&document); err != nil {
+		return nil, fmt.Errorf("error parsing XML: %w", err)
+	}
 
-		if err := xml.NewDecoder(buffer).Decode(&scheduledtasks); err != nil {
-			return nil, fmt.Errorf("error parsing ScheduledTasks XML: %w", err)
+	for _, item := range document.Items {
+		properties := item.Properties
+		if properties.CPassword == "" {
+			continue
 		}
 
-		// Extract and print the desired properties
-		for _, task := range scheduledtasks.Tasks {
-			if len(task.Properties.CPassword) != 0 {
-				password, err := gppp.GPPPDecryptBase64(task.Properties.CPassword)
-				if err != nil {
-					return nil, fmt.Errorf("error decrypting cpassword for scheduled task %q: %w", task.Name, err)
-				}
-				entry := CPasswordEntry{
-					RunAs:     task.Properties.RunAs,
-					CPassword: task.Properties.CPassword,
-					Password:  password,
-				}
-				foundCpasswords = append(foundCpasswords, &entry)
-			}
+		runAs := properties.RunAs
+		if runAs == "" {
+			runAs = properties.AccountName
 		}
 
-	} else if strings.Contains(buffer.String(), "</Groups>") {
-		// Parse the XML data to search for Users
-		groups := Groups{}
-
-		if err := xml.NewDecoder(buffer).Decode(&groups); err != nil {
-			return nil, fmt.Errorf("error parsing Groups XML: %w", err)
+		// A cpassword that fails to decrypt is still worth reporting: the entry is
+		// kept with an empty password rather than aborting the whole document.
+		password, err := gppp.GPPPDecryptBase64(properties.CPassword)
+		if err != nil {
+			password = ""
 		}
 
-		// Extract and print the desired properties
-		for _, user := range groups.Users {
-			if len(user.Properties.CPassword) != 0 {
-				password, err := gppp.GPPPDecryptBase64(user.Properties.CPassword)
-				if err != nil {
-					return nil, fmt.Errorf("error decrypting cpassword for user %q: %w", user.Properties.UserName, err)
-				}
-				entry := CPasswordEntry{
-					UserName:  user.Properties.UserName,
-					NewName:   user.Properties.NewName,
-					CPassword: user.Properties.CPassword,
-					Password:  password,
-				}
-				foundCpasswords = append(foundCpasswords, &entry)
-			}
+		entry := CPasswordEntry{
+			RunAs:     runAs,
+			UserName:  properties.UserName,
+			NewName:   properties.NewName,
+			CPassword: properties.CPassword,
+			Password:  password,
 		}
+		foundCpasswords = append(foundCpasswords, &entry)
 	}
 
 	return foundCpasswords, nil

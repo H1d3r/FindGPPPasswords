@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TheManticoreProject/Manticore/logger"
 	"github.com/TheManticoreProject/Manticore/network/ldap"
 	"github.com/TheManticoreProject/Manticore/network/ldap/ldap_attributes"
 	"github.com/TheManticoreProject/Manticore/windows/credentials"
 	"github.com/p0dalirius/goopts/parser"
+	"manticore-FindGPPPasswords/logger"
 
 	"manticore-FindGPPPasswords/config"
 	"manticore-FindGPPPasswords/core"
@@ -44,11 +44,43 @@ var (
 	testCredentials bool
 )
 
+func defaultLDAPPort(port int, useLdaps bool) int {
+	if port != 0 {
+		return port
+	}
+	if useLdaps {
+		return 636
+	}
+	return 389
+}
+
+func credentialTestMessage(success bool, domain string, username string, password string, noColors bool) string {
+	identity := username
+	if domain != "" {
+		identity = fmt.Sprintf("%s\\%s", domain, username)
+	}
+	message := fmt.Sprintf("   [!] %s : %s", identity, password)
+	color := "\x1b[91m"
+	if success {
+		message = fmt.Sprintf("   [+] %s : %s", identity, password)
+		color = "\x1b[1;92m"
+	}
+	if noColors {
+		return message
+	}
+	return color + message + "\x1b[0m"
+}
+
 func parseArgs() {
-	ap := parser.ArgumentsParser{Banner: "FindGPPPasswords - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.2"}
+	quietRequested := slices.Contains(os.Args[1:], "-q") || slices.Contains(os.Args[1:], "--quiet")
+	banner := "FindGPPPasswords - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.2"
+	if quietRequested {
+		banner = ""
+	}
+	ap := parser.ArgumentsParser{Banner: banner}
 
 	ap.NewBoolArgument(&quiet, "-q", "--quiet", false, "Show no information at all.")
-	ap.NewBoolArgument(&debug, "-d", "--debug", false, "Debug mode.")
+	ap.NewBoolArgument(&debug, "", "--debug", false, "Debug mode.")
 	ap.NewBoolArgument(&nocolors, "-nc", "--no-colors", false, "No colors mode.")
 
 	group_ldapSettings, err := ap.NewArgumentGroup("LDAP Connection Settings")
@@ -56,7 +88,7 @@ func parseArgs() {
 		fmt.Printf("[error] Error creating ArgumentGroup: %s\n", err)
 	} else {
 		group_ldapSettings.NewStringArgument(&domainController, "-dc", "--dc-ip", "", true, "IP Address of the domain controller or KDC (Key Distribution Center) for Kerberos. If omitted, it will use the domain part (FQDN) specified in the identity parameter.")
-		group_ldapSettings.NewTcpPortArgument(&ldapPort, "-lp", "--ldap-port", 389, false, "Port number to connect to LDAP server (uses 636 with --use-ldaps when omitted).")
+		group_ldapSettings.NewTcpPortArgument(&ldapPort, "-lp", "--ldap-port", 0, false, "Port number to connect to LDAP server. Defaults to 389 for LDAP and 636 for LDAPS.")
 		group_ldapSettings.NewBoolArgument(&useLdaps, "-L", "--use-ldaps", false, "Use LDAPS instead of LDAP.")
 	}
 
@@ -87,31 +119,22 @@ func parseArgs() {
 	}
 
 	ap.Parse()
+	logger.SetQuiet(quiet)
 
 	// Select the protocol-specific default unless the user explicitly supplied a port.
-	ldapPortWasSet := false
-	if group_ldapSettings != nil {
-		if ldapPortArgument, ok := group_ldapSettings.LongNameToArgument["--ldap-port"]; ok {
-			ldapPortWasSet = ldapPortArgument.IsPresent()
-		}
-	}
-	if !ldapPortWasSet {
-		if useLdaps {
-			ldapPort = 636
-		} else {
-			ldapPort = 389
-		}
-	}
+	ldapPort = defaultLDAPPort(ldapPort, useLdaps)
 
 	// Validate required arguments
 	if domainController == "" {
-		fmt.Println("[!] Option -dc <fqdn> is required.")
-		ap.Usage()
+		if !quiet {
+			fmt.Println("[!] Option -dc <fqdn> is required.")
+			ap.Usage()
+		}
 		os.Exit(1)
 	}
 }
 
-func TestCredentials(gpppfound gpp.GroupPolicyPreferencePasswordsFound, config config.Config) {
+func TestCredentials(gpppfound gpp.GroupPolicyPreferencePasswordsFound, config config.Config, noColors bool) {
 	testedUsernames := []string{}
 
 	logger.Info("")
@@ -160,24 +183,20 @@ func TestCredentials(gpppfound gpp.GroupPolicyPreferencePasswordsFound, config c
 					}
 
 					if err == nil {
-						if len(domain) == 0 {
-							logger.Info(fmt.Sprintf("\x1b[1;92m   [+] %s : %s\x1b[0m", username, entry.Password))
-						} else {
-							logger.Info(fmt.Sprintf("\x1b[1;92m   [+] %s\\%s : %s\x1b[0m", domain, username, entry.Password))
-						}
+						logger.Info(credentialTestMessage(true, domain, username, entry.Password, noColors))
 					} else {
-						if len(domain) == 0 {
-							logger.Info(fmt.Sprintf("\x1b[91m   [!] %s : %s\x1b[0m", username, entry.Password))
-						} else {
-							logger.Info(fmt.Sprintf("\x1b[91m   [!] %s\\%s : %s\x1b[0m", domain, username, entry.Password))
-						}
+						logger.Info(credentialTestMessage(false, domain, username, entry.Password, noColors))
 					}
 					if ldapSession != nil {
 						ldapSession.Close()
 					}
 					testedUsernames = append(testedUsernames, username)
 				} else {
-					logger.Info(fmt.Sprintf("\x1b[93m   [*] Skipping test of %s : %s to avoid potentiallockout.\x1b[0m", username, entry.Password))
+					message := fmt.Sprintf("   [*] Skipping test of %s : %s to avoid potentiallockout.", username, entry.Password)
+					if !noColors {
+						message = "\x1b[93m" + message + "\x1b[0m"
+					}
+					logger.Info(message)
 				}
 			}
 		}
@@ -344,16 +363,15 @@ func main() {
 			}
 
 			if testCredentials {
-				TestCredentials(gpppfound, config)
+				TestCredentials(gpppfound, config, nocolors)
 			}
 		} else {
-			// This should not happen in an Active Directory domain
-			if config.Debug {
-				logger.Debug("No domain controllers were found, This should not happen in an Active Directory domain.")
-			}
+			logger.Warn("No domain controllers were found; the scan could not be performed.")
+			os.Exit(1)
 		}
 	} else {
 		logger.Warn(fmt.Sprintf("Error: %s", err))
+		os.Exit(1)
 	}
 
 	// Elapsed time
