@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/xml"
 	"fmt"
-	"log"
 	"strings"
 	"unicode/utf16"
 
@@ -117,7 +116,10 @@ func (r *GroupPolicyPreferencePasswordsFound) CallbackFunctionCPassword(session 
 			return err
 		}
 
-		cpasswords := ExtractCPasswordsFromRawXML(buffer)
+		cpasswords, err := ExtractCPasswordsFromRawXML(buffer)
+		if err != nil {
+			return fmt.Errorf("error parsing %s: %w", pathToFile, err)
+		}
 
 		if len(cpasswords) != 0 {
 			if _, ok := r.Entries[uncPathToFile]; !ok {
@@ -188,7 +190,7 @@ func DecryptCPassword(encStr string) string {
 	return password //, nil
 }
 
-func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) []*CPasswordEntry {
+func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) ([]*CPasswordEntry, error) {
 	// Create an instance of Groups to hold the parsed data
 	foundCpasswords := make([]*CPasswordEntry, 0)
 
@@ -198,7 +200,7 @@ func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) []*CPasswordEntry {
 
 		err := xml.NewDecoder(buffer).Decode(&scheduledtasks)
 		if err != nil {
-			log.Fatalf("Error parsing XML: %v", err)
+			return nil, fmt.Errorf("error parsing ScheduledTasks XML: %w", err)
 		}
 
 		// Extract and print the desired properties
@@ -219,7 +221,7 @@ func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) []*CPasswordEntry {
 
 		err := xml.NewDecoder(buffer).Decode(&groups)
 		if err != nil {
-			log.Fatalf("Error parsing XML: %v", err)
+			return nil, fmt.Errorf("error parsing Groups XML: %w", err)
 		}
 
 		// Extract and print the desired properties
@@ -236,7 +238,7 @@ func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) []*CPasswordEntry {
 		}
 	}
 
-	return foundCpasswords
+	return foundCpasswords, nil
 }
 
 // decodeUTF16LE decodes a UTF-16LE byte slice into a string
