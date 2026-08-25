@@ -17,10 +17,12 @@ import (
 
 // XML structure for Properties
 type User_Properties struct {
-	Action    string `xml:"action,attr"`
-	NewName   string `xml:"newName,attr"`
-	UserName  string `xml:"userName,attr"`
-	CPassword string `xml:"cpassword,attr"`
+	Action      string `xml:"action,attr"`
+	NewName     string `xml:"newName,attr"`
+	UserName    string `xml:"userName,attr"`
+	RunAs       string `xml:"runAs,attr"`
+	AccountName string `xml:"accountName,attr"`
+	CPassword   string `xml:"cpassword,attr"`
 }
 
 // XML structure for User
@@ -88,6 +90,14 @@ type Task struct {
 type ScheduledTasks struct {
 	Clsid string `xml:"clsid,attr"`
 	Tasks []Task `xml:"Task"`
+}
+
+type preferenceItem struct {
+	Properties User_Properties `xml:"Properties"`
+}
+
+type preferenceDocument struct {
+	Items []preferenceItem `xml:",any"`
 }
 
 type CPasswordEntry struct {
@@ -191,51 +201,32 @@ func DecryptCPassword(encStr string) string {
 }
 
 func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) ([]*CPasswordEntry, error) {
-	// Create an instance of Groups to hold the parsed data
 	foundCpasswords := make([]*CPasswordEntry, 0)
+	document := preferenceDocument{}
 
-	if strings.Contains(buffer.String(), "</ScheduledTasks>") {
-		// Parse the XML data to search for ScheduledTasks
-		scheduledtasks := ScheduledTasks{}
+	if err := xml.NewDecoder(buffer).Decode(&document); err != nil {
+		return nil, fmt.Errorf("error parsing XML: %w", err)
+	}
 
-		err := xml.NewDecoder(buffer).Decode(&scheduledtasks)
-		if err != nil {
-			return nil, fmt.Errorf("error parsing ScheduledTasks XML: %w", err)
+	for _, item := range document.Items {
+		properties := item.Properties
+		if properties.CPassword == "" {
+			continue
 		}
 
-		// Extract and print the desired properties
-		for _, task := range scheduledtasks.Tasks {
-			if len(task.Properties.CPassword) != 0 {
-				entry := CPasswordEntry{
-					RunAs:     task.Properties.RunAs,
-					CPassword: task.Properties.CPassword,
-					Password:  DecryptCPassword(task.Properties.CPassword),
-				}
-				foundCpasswords = append(foundCpasswords, &entry)
-			}
+		runAs := properties.RunAs
+		if runAs == "" {
+			runAs = properties.AccountName
 		}
 
-	} else if strings.Contains(buffer.String(), "</Groups>") {
-		// Parse the XML data to search for Users
-		groups := Groups{}
-
-		err := xml.NewDecoder(buffer).Decode(&groups)
-		if err != nil {
-			return nil, fmt.Errorf("error parsing Groups XML: %w", err)
+		entry := CPasswordEntry{
+			RunAs:     runAs,
+			UserName:  properties.UserName,
+			NewName:   properties.NewName,
+			CPassword: properties.CPassword,
+			Password:  DecryptCPassword(properties.CPassword),
 		}
-
-		// Extract and print the desired properties
-		for _, user := range groups.Users {
-			if len(user.Properties.CPassword) != 0 {
-				entry := CPasswordEntry{
-					UserName:  user.Properties.UserName,
-					NewName:   user.Properties.NewName,
-					CPassword: user.Properties.CPassword,
-					Password:  DecryptCPassword(user.Properties.CPassword),
-				}
-				foundCpasswords = append(foundCpasswords, &entry)
-			}
-		}
+		foundCpasswords = append(foundCpasswords, &entry)
 	}
 
 	return foundCpasswords, nil
