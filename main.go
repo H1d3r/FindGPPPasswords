@@ -345,13 +345,12 @@ func main() {
 				TestCredentials(gpppfound, config, nocolors)
 			}
 		} else {
-			// This should not happen in an Active Directory domain
-			if config.Debug {
-				logger.Debug("No domain controllers were found, This should not happen in an Active Directory domain.")
-			}
+			logger.Warn("No domain controllers were found; the scan could not be performed.")
+			os.Exit(1)
 		}
 	} else {
 		logger.Warn(fmt.Sprintf("Error: %s", err))
+		os.Exit(1)
 	}
 
 	// Elapsed time
