@@ -52,11 +52,33 @@ func defaultLDAPPort(port int, useLdaps bool) int {
 	return 389
 }
 
+func credentialTestMessage(success bool, domain string, username string, password string, noColors bool) string {
+	identity := username
+	if domain != "" {
+		identity = fmt.Sprintf("%s\\%s", domain, username)
+	}
+	message := fmt.Sprintf("   [!] %s : %s", identity, password)
+	color := "\x1b[91m"
+	if success {
+		message = fmt.Sprintf("   [+] %s : %s", identity, password)
+		color = "\x1b[1;92m"
+	}
+	if noColors {
+		return message
+	}
+	return color + message + "\x1b[0m"
+}
+
 func parseArgs() {
-	ap := parser.ArgumentsParser{Banner: "FindGPPPasswords - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.2"}
+	quietRequested := slices.Contains(os.Args[1:], "-q") || slices.Contains(os.Args[1:], "--quiet")
+	banner := "FindGPPPasswords - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.2"
+	if quietRequested {
+		banner = ""
+	}
+	ap := parser.ArgumentsParser{Banner: banner}
 
 	ap.NewBoolArgument(&quiet, "-q", "--quiet", false, "Show no information at all.")
-	ap.NewBoolArgument(&debug, "-d", "--debug", false, "Debug mode.")
+	ap.NewBoolArgument(&debug, "", "--debug", false, "Debug mode.")
 	ap.NewBoolArgument(&nocolors, "-nc", "--no-colors", false, "No colors mode.")
 
 	group_ldapSettings, err := ap.NewArgumentGroup("LDAP Connection Settings")
@@ -95,18 +117,21 @@ func parseArgs() {
 	}
 
 	ap.Parse()
+	logger.SetQuiet(quiet)
 
 	ldapPort = defaultLDAPPort(ldapPort, useLdaps)
 
 	// Validate required arguments
 	if domainController == "" {
-		fmt.Println("[!] Option -dc <fqdn> is required.")
-		ap.Usage()
+		if !quiet {
+			fmt.Println("[!] Option -dc <fqdn> is required.")
+			ap.Usage()
+		}
 		os.Exit(1)
 	}
 }
 
-func TestCredentials(gpppfound crypto.GroupPolicyPreferencePasswordsFound, config config.Config) {
+func TestCredentials(gpppfound crypto.GroupPolicyPreferencePasswordsFound, config config.Config, noColors bool) {
 	testedUsernames := []string{}
 
 	logger.Info("")
@@ -152,21 +177,18 @@ func TestCredentials(gpppfound crypto.GroupPolicyPreferencePasswordsFound, confi
 
 					err := ldapSession.Connect()
 					if err == nil {
-						if len(domain) == 0 {
-							logger.Info(fmt.Sprintf("\x1b[1;92m   [+] %s : %s\x1b[0m", username, entry.Password))
-						} else {
-							logger.Info(fmt.Sprintf("\x1b[1;92m   [+] %s\\%s : %s\x1b[0m", domain, username, entry.Password))
-						}
+						logger.Info(credentialTestMessage(true, domain, username, entry.Password, noColors))
 					} else {
-						if len(domain) == 0 {
-							logger.Info(fmt.Sprintf("\x1b[91m   [!] %s : %s\x1b[0m", username, entry.Password))
-						} else {
-							logger.Info(fmt.Sprintf("\x1b[91m   [!] %s\\%s : %s\x1b[0m", domain, username, entry.Password))
-						}
+						logger.Info(credentialTestMessage(false, domain, username, entry.Password, noColors))
 					}
+					ldapSession.Close()
 					testedUsernames = append(testedUsernames, username)
 				} else {
-					logger.Info(fmt.Sprintf("\x1b[93m   [*] Skipping test of %s : %s to avoid potentiallockout.\x1b[0m", username, entry.Password))
+					message := fmt.Sprintf("   [*] Skipping test of %s : %s to avoid potentiallockout.", username, entry.Password)
+					if !noColors {
+						message = "\x1b[93m" + message + "\x1b[0m"
+					}
+					logger.Info(message)
 				}
 			}
 		}
@@ -229,6 +251,7 @@ func main() {
 	err = ldapSession.Connect()
 
 	if err == nil {
+		defer ldapSession.Close()
 		logger.Info(fmt.Sprintf("Connected as '%s\\%s'", authDomain, authUsername))
 
 		domainControllersQuery := "(&"
@@ -322,16 +345,15 @@ func main() {
 			}
 
 			if testCredentials {
-				TestCredentials(gpppfound, config)
+				TestCredentials(gpppfound, config, nocolors)
 			}
 		} else {
-			// This should not happen in an Active Directory domain
-			if config.Debug {
-				logger.Debug("No domain controllers were found, This should not happen in an Active Directory domain.")
-			}
+			logger.Warn("No domain controllers were found; the scan could not be performed.")
+			os.Exit(1)
 		}
 	} else {
 		logger.Warn(fmt.Sprintf("Error: %s", err))
+		os.Exit(1)
 	}
 
 	// Elapsed time
