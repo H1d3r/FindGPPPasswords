@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"FindGPPPasswords/core/config"
-	"FindGPPPasswords/core/crypto"
+	"manticore-FindGPPPasswords/config"
+	"manticore-FindGPPPasswords/gpp"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -26,8 +26,8 @@ func TestGenerateExcelWritesOneCredentialPerRow(t *testing.T) {
 	outputDir := t.TempDir()
 	settings := config.Config{OutputDir: outputDir}
 	settings.Credentials.Domain = "example"
-	results := crypto.GroupPolicyPreferencePasswordsFound{
-		Entries: map[string][]*crypto.CPasswordEntry{
+	results := gpp.GroupPolicyPreferencePasswordsFound{
+		Entries: map[string][]*gpp.CPasswordEntry{
 			`\\dc\SYSVOL\Groups.xml`: {
 				{RunAs: `EXAMPLE\task-user`, Password: "task-password"},
 				{UserName: "local-user", NewName: "renamed-user", Password: "local-password"},

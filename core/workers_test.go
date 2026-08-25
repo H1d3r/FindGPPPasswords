@@ -5,14 +5,14 @@ import (
 	"sync"
 	"testing"
 
-	"FindGPPPasswords/core/crypto"
+	"manticore-FindGPPPasswords/gpp"
 )
 
 func TestGPPResultCollectorConcurrentMerge(t *testing.T) {
 	const workers = 100
 
-	combined := crypto.GroupPolicyPreferencePasswordsFound{
-		Entries: make(map[string][]*crypto.CPasswordEntry),
+	combined := gpp.GroupPolicyPreferencePasswordsFound{
+		Entries: make(map[string][]*gpp.CPasswordEntry),
 	}
 	collector := gppResultCollector{results: &combined}
 
@@ -23,8 +23,8 @@ func TestGPPResultCollectorConcurrentMerge(t *testing.T) {
 			defer wg.Done()
 
 			path := fmt.Sprintf(`\\dc-%d\SYSVOL\Groups.xml`, id)
-			workerResults := crypto.GroupPolicyPreferencePasswordsFound{
-				Entries: map[string][]*crypto.CPasswordEntry{
+			workerResults := gpp.GroupPolicyPreferencePasswordsFound{
+				Entries: map[string][]*gpp.CPasswordEntry{
 					path:                         {{UserName: fmt.Sprintf("user-%d", id)}},
 					`\\shared\SYSVOL\Groups.xml`: {{UserName: fmt.Sprintf("shared-user-%d", id)}},
 				},

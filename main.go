@@ -1,21 +1,23 @@
 package main
 
 import (
-	"FindGPPPasswords/core"
-	"FindGPPPasswords/core/config"
-	"FindGPPPasswords/core/crypto"
-	"FindGPPPasswords/core/exporter"
-	"FindGPPPasswords/core/logger"
-	"FindGPPPasswords/network/ldap"
-	"slices"
-
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/TheManticoreProject/Manticore/network/ldap"
+	"github.com/TheManticoreProject/Manticore/network/ldap/ldap_attributes"
+	"github.com/TheManticoreProject/Manticore/windows/credentials"
 	"github.com/p0dalirius/goopts/parser"
+	"manticore-FindGPPPasswords/logger"
+
+	"manticore-FindGPPPasswords/config"
+	"manticore-FindGPPPasswords/core"
+	"manticore-FindGPPPasswords/exporter"
+	"manticore-FindGPPPasswords/gpp"
 )
 
 var (
@@ -119,6 +121,7 @@ func parseArgs() {
 	ap.Parse()
 	logger.SetQuiet(quiet)
 
+	// Select the protocol-specific default unless the user explicitly supplied a port.
 	ldapPort = defaultLDAPPort(ldapPort, useLdaps)
 
 	// Validate required arguments
@@ -131,7 +134,7 @@ func parseArgs() {
 	}
 }
 
-func TestCredentials(gpppfound crypto.GroupPolicyPreferencePasswordsFound, config config.Config, noColors bool) {
+func TestCredentials(gpppfound gpp.GroupPolicyPreferencePasswordsFound, config config.Config, noColors bool) {
 	testedUsernames := []string{}
 
 	logger.Info("")
@@ -164,24 +167,29 @@ func TestCredentials(gpppfound crypto.GroupPolicyPreferencePasswordsFound, confi
 
 			if len(username) != 0 {
 				if !slices.Contains(testedUsernames, username) {
-					ldapSession := ldap.Session{}
-					ldapSession.InitSession(
-						domainController,
-						ldapPort,
-						config.UseLdaps,
-						domain,
-						username,
-						entry.Password,
-						config.Debug,
-					)
+					creds, err := credentials.NewCredentials(domain, username, entry.Password, "")
+					var ldapSession *ldap.Session
+					if err == nil {
+						ldapSession, err = ldap.NewSession(
+							domainController,
+							ldapPort,
+							creds,
+							config.UseLdaps,
+							false,
+						)
+					}
+					if err == nil {
+						_, err = ldapSession.Connect()
+					}
 
-					err := ldapSession.Connect()
 					if err == nil {
 						logger.Info(credentialTestMessage(true, domain, username, entry.Password, noColors))
 					} else {
 						logger.Info(credentialTestMessage(false, domain, username, entry.Password, noColors))
 					}
-					ldapSession.Close()
+					if ldapSession != nil {
+						ldapSession.Close()
+					}
 					testedUsernames = append(testedUsernames, username)
 				} else {
 					message := fmt.Sprintf("   [*] Skipping test of %s : %s to avoid potentiallockout.", username, entry.Password)
@@ -209,6 +217,7 @@ func main() {
 	config.Credentials.Username = authUsername
 	config.Credentials.Domain = authDomain
 	config.Credentials.Password = authPassword
+	config.Credentials.Hashes = authHashes
 	config.Credentials.DCIP = domainController
 	if len(dnsNameServer) == 0 {
 		config.DnsNameServer = domainController
@@ -238,17 +247,25 @@ func main() {
 			logger.Debug(fmt.Sprintf("Connecting to remote ldaps://%s:%d ...", domainController, ldapPort))
 		}
 	}
-	ldapSession := ldap.Session{}
-	ldapSession.InitSession(
-		domainController,
-		ldapPort,
-		config.UseLdaps,
+	creds, err := credentials.NewCredentials(
 		config.Credentials.Domain,
 		config.Credentials.Username,
 		config.Credentials.Password,
-		config.Debug,
+		config.Credentials.Hashes,
 	)
-	err = ldapSession.Connect()
+	var ldapSession *ldap.Session
+	if err == nil {
+		ldapSession, err = ldap.NewSession(
+			domainController,
+			ldapPort,
+			creds,
+			config.UseLdaps,
+			false,
+		)
+	}
+	if err == nil {
+		_, err = ldapSession.Connect()
+	}
 
 	if err == nil {
 		defer ldapSession.Close()
@@ -258,11 +275,9 @@ func main() {
 		// We look for computer accounts
 		domainControllersQuery += "(objectClass=computer)"
 		// That are domain controllers
-		UAF_SERVER_TRUST_ACCOUNT := 0x2000
-		domainControllersQuery += fmt.Sprintf("(userAccountControl:1.2.840.113556.1.4.803:=%d)", UAF_SERVER_TRUST_ACCOUNT)
+		domainControllersQuery += fmt.Sprintf("(userAccountControl:1.2.840.113556.1.4.803:=%d)", ldap_attributes.UAF_SERVER_TRUST_ACCOUNT)
 		// Account that are not disabled
-		UAF_ACCOUNT_DISABLED := 0x0002
-		domainControllersQuery += fmt.Sprintf("(!(userAccountControl:1.2.840.113556.1.4.803:=%d))", UAF_ACCOUNT_DISABLED)
+		domainControllersQuery += fmt.Sprintf("(!(userAccountControl:1.2.840.113556.1.4.803:=%d))", ldap_attributes.UAF_ACCOUNT_DISABLED)
 		// Closing the AND
 		domainControllersQuery += ")"
 
@@ -270,10 +285,13 @@ func main() {
 			logger.Debug(fmt.Sprintf("LDAP query used: %s", domainControllersQuery))
 		}
 		attributes := []string{"distinguishedName", "dnsHostname"}
-		domainControllersResults := ldap.QueryWholeSubtree(&ldapSession, "", domainControllersQuery, attributes)
+		domainControllersResults, queryErr := ldapSession.QueryWholeSubtree("", domainControllersQuery, attributes)
+		if queryErr != nil {
+			logger.Warn(fmt.Sprintf("Error querying domain controllers: %s", queryErr))
+		}
 
-		gpppfound := crypto.GroupPolicyPreferencePasswordsFound{}
-		gpppfound.Entries = make(map[string][]*crypto.CPasswordEntry)
+		gpppfound := gpp.GroupPolicyPreferencePasswordsFound{}
+		gpppfound.Entries = make(map[string][]*gpp.CPasswordEntry)
 
 		if len(domainControllersResults) != 0 {
 

@@ -1,19 +1,53 @@
-package crypto
+package gpp
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"strings"
-	"unicode/utf16"
 
-	"github.com/jfjallid/go-smb/smb"
-	"github.com/zenazn/pkcs7pad"
+	"github.com/TheManticoreProject/Manticore/crypto/gppp"
+	smbclient "github.com/TheManticoreProject/Manticore/network/smb/client"
+	"github.com/TheManticoreProject/Manticore/windows/fileflags"
 )
+
+// transferChunk bounds how many bytes are buffered in memory per read iteration
+// when downloading a remote file. The SMB client further splits each call to fit
+// the negotiated MaxBufferSize, so this only caps our own buffering.
+const transferChunk = 0xFF00
+
+// readRemoteFile streams the remote file at the share-relative path on the
+// client's current tree into w.
+func readRemoteFile(client *smbclient.Client, path string, w io.Writer) error {
+	h, err := client.OpenFile(path, smbclient.OpenOptions{
+		DesiredAccess:     fileflags.GENERIC_READ,
+		ShareAccess:       fileflags.FILE_SHARE_READ,
+		CreateDisposition: fileflags.FILE_OPEN,
+		CreateOptions:     fileflags.FILE_NON_DIRECTORY_FILE,
+	})
+	if err != nil {
+		return err
+	}
+	defer client.CloseFile(h)
+
+	var offset uint64
+	for {
+		chunk, rerr := client.ReadFile(h, offset, transferChunk)
+		if len(chunk) > 0 {
+			if _, werr := w.Write(chunk); werr != nil {
+				return werr
+			}
+			offset += uint64(len(chunk))
+		}
+		// The client surfaces an error at end of file; a short read also marks
+		// the end. Either way we stop after consuming whatever was returned.
+		if rerr != nil || uint32(len(chunk)) < transferChunk {
+			break
+		}
+	}
+	return nil
+}
 
 // XML structure for Properties
 type User_Properties struct {
@@ -112,23 +146,23 @@ type GroupPolicyPreferencePasswordsFound struct {
 	Entries map[string][]*CPasswordEntry
 }
 
-func (r *GroupPolicyPreferencePasswordsFound) CallbackFunctionCPassword(session *smb.Connection, share string, pathToFile string) error {
+func (r *GroupPolicyPreferencePasswordsFound) CallbackFunctionCPassword(client *smbclient.Client, share string, pathToFile string) error {
 	elements := strings.Split(pathToFile, ".")
 	extension := strings.ToLower(elements[len(elements)-1])
 
 	if strings.EqualFold(extension, "xml") {
-		uncPathToFile := fmt.Sprintf("\\\\%s\\%s\\%s", session.GetTargetInfo().DnsComputerName, share, pathToFile)
+		uncPathToFile := fmt.Sprintf("\\\\%s\\%s\\%s", client.ServerIdentity().DNSComputerName, share, pathToFile)
 
 		buffer := bytes.NewBuffer([]byte{})
 
-		err := session.RetrieveFile(share, pathToFile, 0, buffer.Write)
+		err := readRemoteFile(client, pathToFile, buffer)
 		if err != nil {
 			return err
 		}
 
 		cpasswords, err := ExtractCPasswordsFromRawXML(buffer)
 		if err != nil {
-			return fmt.Errorf("error parsing %s: %w", pathToFile, err)
+			return fmt.Errorf("error extracting GPP passwords from %s: %w", pathToFile, err)
 		}
 
 		if len(cpasswords) != 0 {
@@ -140,64 +174,6 @@ func (r *GroupPolicyPreferencePasswordsFound) CallbackFunctionCPassword(session 
 	}
 
 	return nil
-}
-
-// DecryptCPassword decrypts a base64 encoded string using the fixed AES key and IV
-func DecryptCPassword(encStr string) string {
-	// AES Key as per the Microsoft documentation
-	key := []byte{
-		0x4e, 0x99, 0x06, 0xe8, 0xfc, 0xb6, 0x6c, 0xc9, 0xfa, 0xf4, 0x93, 0x10, 0x62, 0x0f, 0xfe, 0xe8,
-		0xf4, 0x96, 0xe8, 0x06, 0xcc, 0x05, 0x79, 0x90, 0x20, 0x9b, 0x09, 0xa4, 0x33, 0xb6, 0x6c, 0x1b,
-	}
-
-	// Fixed null IV (Initialization Vector)
-	iv := make([]byte, aes.BlockSize)
-
-	// Padding base64 encoded string to ensure it's properly padded
-	pad := len(encStr) % 4
-	if pad == 1 {
-		encStr = encStr[:len(encStr)-1]
-	} else if pad == 2 || pad == 3 {
-		encStr += strings.Repeat("=", 4-pad)
-	}
-
-	// Decode base64 string
-	ciphertext, err := base64.StdEncoding.DecodeString(encStr)
-	if err != nil {
-		return "" //, fmt.Errorf("base64 decoding failed: %v", err)
-	}
-
-	// Create AES cipher block
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "" //, fmt.Errorf("failed to create AES cipher: %v", err)
-	}
-
-	// Ensure ciphertext length is a multiple of AES block size
-	if len(ciphertext)%aes.BlockSize != 0 {
-		return "" //, fmt.Errorf("ciphertext is not a multiple of the block size")
-	}
-
-	// Create CBC decrypter
-	mode := cipher.NewCBCDecrypter(block, iv)
-
-	// Decrypt the ciphertext
-	plaintext := make([]byte, len(ciphertext))
-	mode.CryptBlocks(plaintext, ciphertext)
-
-	// Remove PKCS#7 padding
-	plaintext, err = pkcs7pad.Unpad(plaintext)
-	if err != nil {
-		return "" //, fmt.Errorf("unpadding failed: %v", err)
-	}
-
-	// Convert from UTF-16LE to string
-	password, err := decodeUTF16LE(plaintext)
-	if err != nil {
-		return "" //, fmt.Errorf("UTF-16-LE decoding failed: %v", err)
-	}
-
-	return password //, nil
 }
 
 func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) ([]*CPasswordEntry, error) {
@@ -219,37 +195,22 @@ func ExtractCPasswordsFromRawXML(buffer *bytes.Buffer) ([]*CPasswordEntry, error
 			runAs = properties.AccountName
 		}
 
+		// A cpassword that fails to decrypt is still worth reporting: the entry is
+		// kept with an empty password rather than aborting the whole document.
+		password, err := gppp.GPPPDecryptBase64(properties.CPassword)
+		if err != nil {
+			password = ""
+		}
+
 		entry := CPasswordEntry{
 			RunAs:     runAs,
 			UserName:  properties.UserName,
 			NewName:   properties.NewName,
 			CPassword: properties.CPassword,
-			Password:  DecryptCPassword(properties.CPassword),
+			Password:  password,
 		}
 		foundCpasswords = append(foundCpasswords, &entry)
 	}
 
 	return foundCpasswords, nil
-}
-
-// decodeUTF16LE decodes a UTF-16LE byte slice into a string
-func decodeUTF16LE(b []byte) (string, error) {
-	// Ensure the byte slice has an even length since UTF-16 is 2 bytes per character
-	if len(b)%2 != 0 {
-		return "", fmt.Errorf("invalid UTF-16LE byte slice length")
-	}
-
-	// Create a slice to hold the 16-bit runes
-	u16 := make([]uint16, len(b)/2)
-
-	// Use binary.Read to convert the byte slice into uint16 values in Little Endian order
-	err := binary.Read(bytes.NewReader(b), binary.LittleEndian, &u16)
-	if err != nil {
-		return "", fmt.Errorf("failed to convert bytes to UTF-16LE: %v", err)
-	}
-
-	// Decode the UTF-16 sequence, assuming no surrogate pairs are present
-	runes := utf16.Decode(u16)
-
-	return string(runes), nil
 }

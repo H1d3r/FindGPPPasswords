@@ -6,6 +6,7 @@ type Config struct {
 		Username string
 		Domain   string
 		Password string
+		Hashes   string
 		DCIP     string
 	}
 	// Network
