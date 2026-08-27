@@ -1,13 +1,11 @@
 ![](./.github/banner.png)
 
 <p align="center">
-    A cross-platform tool to find and decrypt Group Policy Preferences passwords from the SYSVOL share using low-privileged domain accounts.
+    A tool to find and decrypt Group Policy Preferences passwords (cpassword) from the SYSVOL share on domain controllers over SMB/LDAP.
     <br>
     <a href="https://github.com/TheManticoreProject/FindGPPPasswords/actions/workflows/release.yaml" title="Build"><img alt="Build and Release" src="https://github.com/TheManticoreProject/FindGPPPasswords/actions/workflows/release.yaml/badge.svg"></a>
     <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/TheManticoreProject/FindGPPPasswords">
     <img alt="Go Report Card" src="https://goreportcard.com/badge/github.com/TheManticoreProject/FindGPPPasswords"> 
-    <a href="https://twitter.com/intent/follow?screen_name=podalirius_" title="Follow"><img src="https://img.shields.io/twitter/follow/podalirius_?label=Podalirius&style=social"></a>
-    <a href="https://www.youtube.com/c/Podalirius_?sub_confirmation=1" title="Subscribe"><img alt="YouTube Channel Subscribers" src="https://img.shields.io/youtube/channel/subscribers/UCF_x5O7CSfr82AfNVTKOv_A?style=social"></a>
     <br>
 </p>
 
@@ -22,25 +20,21 @@
  - [x] Option to test the credentials of the found GPP passwords with the `--test-credentials` option.
  - [x] Multi-threaded mode with option `--threads <number_of_threads>`.
 
-## Demonstration
-
-By default, the tool will only find the GPP passwords and print them in cleartext:
-
-```bash
-./FindGPPPasswords-linux-amd64 --domain <domain> --username <username> --password <password>
-```
-
-![](./.github/example.png)
-
-There is also the possibility to test the credentials of the found GPP passwords with the `--test-credentials` option.
-
-```bash
-./FindGPPPasswords-linux-amd64 --test-credentials --domain <domain> --username <username> --password <password>
-```
-
-![](./.github/example_test_credentials.png)
-
 ## Usage
+
+By default, the tool finds and prints all Group Policy Preferences passwords in cleartext:
+
+```bash
+$ ./FindGPPPasswords --domain <domain> --username <username> --password <password> --dc-ip <dc-ip>
+```
+
+To test credentials of found passwords:
+
+```bash
+$ ./FindGPPPasswords --domain <domain> --username <username> --password <password> --dc-ip <dc-ip> --test-credentials
+```
+
+For full usage information:
 
 ```              
 $ ./FindGPPPasswords -h
@@ -49,7 +43,7 @@ FindGPPPasswords - by Remi GASCOU (Podalirius) @ TheManticoreProject - v1.2
 Usage: FindGPPPasswords [--quiet] [--debug] [--no-colors] [--export-xlsx <string>] [--test-credentials] --domain <string> --username <string> [--password <string>] [--hashes <string>] [--threads <int>] [--nameserver <string>] --dc-ip <string> [--ldap-port <tcp port>] [--use-ldaps]
 
   -q, --quiet      Show no information at all. (default: false)
-  -d, --debug      Debug mode. (default: false)
+  --debug          Debug mode. (default: false)
   -nc, --no-colors No colors mode. (default: false)
 
   Additional Options:
@@ -70,12 +64,38 @@ Usage: FindGPPPasswords [--quiet] [--debug] [--no-colors] [--export-xlsx <string
     -dc, --dc-ip <string>       IP Address of the domain controller or KDC (Key Distribution Center) for Kerberos. If omitted, it will use the domain part (FQDN) specified in the identity parameter.
     -lp, --ldap-port <tcp port> Port number to connect to LDAP server. (default: 389)
     -L, --use-ldaps             Use LDAPS instead of LDAP. (default: false)
+```
+
+## Output format
+
+Results are printed using TheManticoreProject conventions:
+
+- Always use the `logger` package for output: `logger.Info` for status, `logger.Warn` for recoverable errors, `logger.Debug` for `--debug`-only output.
+- Results are displayed with a tree structure using `├──` for items and `└──` for the last item.
+- Colour palette: file paths in blue (`\x1b[94m`), passwords in yellow (`\x1b[93m`). Every opened escape is closed with `\x1b[0m`.
+- Use `--no-colors` to disable colour output for scripting.
+
+Example output:
 
 ```
+[+] File: \\DC1.domain.local\SYSVOL\domain.local\Policies\{GUID}\Machine\Preferences\ScheduledTasks\ScheduledTasks.xml
+  │ RunAs : DOMAIN\user
+  │ Password : SuperSecretPassword123!
+  └──
+```
+
+## Demonstration
+
+![](./.github/example.png)
+
+Example with `--test-credentials`:
+
+![](./.github/example_test_credentials.png)
 
 ## Contributing
 
 Pull requests are welcome. Feel free to open an issue if you want to add other features.
 
 ## Credits
-  - [Remi GASCOU (Podalirius)](https://github.com/p0dalirius) for the creation of the [FindGPPPasswords](https://github.com/p0dalirius/FindGPPPasswords) project before transferring it to TheManticoreProject.
+
+- [Remi GASCOU (Podalirius)](https://github.com/p0dalirius) for the creation of the [FindGPPPasswords](https://github.com/p0dalirius/FindGPPPasswords) project before transferring it to TheManticoreProject.
