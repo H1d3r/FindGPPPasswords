@@ -9,7 +9,6 @@
     <br>
 </p>
 
-
 ## Features
 
  - [x] Only requires a **low privileges domain user account**.
@@ -64,24 +63,6 @@ Usage: FindGPPPasswords [--quiet] [--debug] [--no-colors] [--export-xlsx <string
     -dc, --dc-ip <string>       IP Address of the domain controller or KDC (Key Distribution Center) for Kerberos. If omitted, it will use the domain part (FQDN) specified in the identity parameter.
     -lp, --ldap-port <tcp port> Port number to connect to LDAP server. (default: 389)
     -L, --use-ldaps             Use LDAPS instead of LDAP. (default: false)
-```
-
-## Output format
-
-Results are printed using TheManticoreProject conventions:
-
-- Always use the `logger` package for output: `logger.Info` for status, `logger.Warn` for recoverable errors, `logger.Debug` for `--debug`-only output.
-- Results are displayed with a tree structure using `├──` for items and `└──` for the last item.
-- Colour palette: file paths in blue (`\x1b[94m`), passwords in yellow (`\x1b[93m`). Every opened escape is closed with `\x1b[0m`.
-- Use `--no-colors` to disable colour output for scripting.
-
-Example output:
-
-```
-[+] File: \\DC1.domain.local\SYSVOL\domain.local\Policies\{GUID}\Machine\Preferences\ScheduledTasks\ScheduledTasks.xml
-  │ RunAs : DOMAIN\user
-  │ Password : SuperSecretPassword123!
-  └──
 ```
 
 ## Demonstration
